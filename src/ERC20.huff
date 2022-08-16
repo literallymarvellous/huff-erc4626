@@ -12,6 +12,13 @@
 #define function allowance(address,address) view returns (uint256)
 #define function totalSupply() view returns (uint256)
 
+#define function transfer(address,uint256) nonpayable returns ()
+#define function transferFrom(address,address,uint256) nonpayable returns ()
+#define function approve(address,uint256) nonpayable returns ()
+
+#define function mint(address,uint256) nonpayable returns ()
+#define function burn(uint256) nonpayable returns ()
+
 #define event Transfer(address,address,uint256)
 #define event Approval(address,address,uint256)
 
@@ -64,6 +71,7 @@
     sstore                      // []
 }
 
+/* Metadata Functions */
 #define macro NAME() = takes (0) returns (0) {
     [NAME_LOACATION]     // [name_ptr]
     sload                // [name]
@@ -108,6 +116,7 @@
     return               // []
 }
 
+/* Accounting Functions */
 #define macro TOTAL_SUPPLY() = takes (0) returns (0) {
     // read total supply from storage
     [TOTAL_SUPPLY_LOCATION] // [total_supply_ptr]
@@ -131,8 +140,8 @@
     mstore               // [address]
     0x20                 // [0x20, address]
     mstore               // []
-    0x40                // [0x40, address]
-    0x00                // [0x00, 0x00, address]
+    0x40                 // [0x40]
+    0x00                 // [0x00, 0x40]
     sha3                 // [key]
     sload                // [balance]
     
@@ -147,45 +156,292 @@
 }
 
 #define macro ALLOWANCE() = takes (0) returns (0) {
-    // read allowance from storage
-    [ALLOWANCE_LOCATION] // [ALLOWANCE_LOCATION]
-    sload                // [allowance]
-    
+    0x24 calldataload              // [spender]
+    0x04 calldataload              // [owner, spender]
+
+    // mapping owner => spender => allowance
+    // First hash allownace_ptr & owner to get storage loaction for spender => allowance
+    // then hash the spender storage slot & spender to get the allowance key
+    // then read the allowance from storage
+
+    [ALLOWANCE_LOCATION]           // [allowance_ptr, owner, spender]
+    0x00                           // [0x00, allowance_ptr, owner, spender]
+    mstore                         // [owner, spender]
+    0x20                           // [0x20, owner, spender]
+    mstore                         // [spender]
+    0x40                           // [0x40, spender]
+    0x00                           // [0x00, 0x40, spender]
+    sha3                           // [slot, spender]
+    0x00                          // [0x00, slot, spender]
+    mstore                        // [spender]
+    0x20                          // [0x20, spender]
+    mstore                        // []
+    0x40                          // [0x40]
+    0x00                          // [0x00, 0x40]
+    sha3                          // [key]
+    sload                         // [allowance]
+
     // store in memory
-    0x00                 // [0x00, allowance]
-    mstore               // []
-    
+    0x00                          // [0x00, allowance]
+    mstore                        // []
+
     // return
     0x20                 // [0x20]
     0x00                 // [0x00, 0x00]
     return               // []
 }
 
+/* Transfer Functions */
+#define macro TRANSFER_FROM() = takes(0) returns (0) {
+    // read balance from storage
+    0x44 calldataload    // [value]
+    0x24 calldataload    // [to, value]
+    0x04 calldataload    // [from, to, value]
+    
+    // retrieve allowance from storage
+    [ALLOWANCE_LOCATION]  // [allowance_ptr, from, to, value]
+    0x00                  // [0x00, allowance_ptr, from, to, value]
+    mstore                // [from, to, value]
+    dup1                  // [from, from, to, value]
+    0x20                  // [0x20, from, from, to, value]
+    mstore                // [from, to, value]
+    0x40                  // [0x40, from, to, value]
+    0x00                  // [0x00, 0x40, from, to, value]
+    sha3                  // [slot, from, to, value]
+    0x00                  // [0x00, slot, from, to, value]
+    mstore                // [from, to, value]
+    dup2                  // [to, from, to, value]                  
+    0x20                  // [0x20, to, from, to, value]
+    mstore                // [from , to, value]
+    0x40                  // [0x40, from, to, value]
+    0x00                  // [0x00, 0x40, from, to, value]
+    sha3                  // [key, from, to, value]
+    dup1                  // [key, key, from, to, value]
+    sload                 // [allowance, key, from, to, value]
+
+    // check if allowance is sufficient
+    0x01                  // [0x01, allowance, key, from, to, value]
+    0x00                  // [0x00, 0x01, allowance, key, from, to, value]
+    sub                   // [type(uint256).max, allowance, from, to, key, value]
+    dup2                  // [allowance, type(uint256).max, allowance, key, from, to, value]
+    eq                    // [allowance == type(uint256).max, allowance, key, from, to, value]
+    err jumpi             // [allowance == type(uint256).max, allowance, key, from, to, value]
+
+    // update allowance
+    pop                    // [allowance, key, from, to, value]
+    dup5 swap2             // [allowance, value, key, from, to, value]
+    sub                    // [new_allowance, key, from, to, value]
+    swap1                  // [key, new_allowance, from, to, value]
+    sstore                 // [from, to, value]
+
+    // load balance of from
+    swap2                         // [value, from, to]
+    dup2                          // [from, value, from, to]
+    [BALANCE_LOCATION]            // [balance_ptr, from, value, from, to]
+    0x00                          // [0x00, balance_ptr, from, value, from, to]
+    mstore                        // [from, value, from, to]
+    0x20                          // [0x20, from, value, from, to]
+    mstore                        // [value, from, to]
+    0x40                          // [0x40, value, from, to]
+    0x00                          // [0x00, 0x40, value, from, to]
+    sha3                          // [key, value, from, to]
+    dup1                          // [key, key, value, from, to]
+    sload                         // [balance, key, value, from, to]
+
+    // update balance of from
+    dup2                          // [value, balance, key, value, from, to]
+    swap1                         // [balance, value, key, value, from, to]
+    sub                           // [new_balance, key, value, from, to]
+
+    // store new balance of from
+    swap1                         // [key, new_balance, value, from, to]
+    sstore                        // [value, from, to]
+
+    // load balance of to from storage
+    dup3                          // [to, value, from, to]
+    [BALANCE_LOCATION]            // [balance_ptr, to, value, from, to]
+    0x00                          // [0x00, balance_ptr, to, value, from, to]
+    mstore                        // [to, value, from, to]
+    0x20                          // [0x20, to, value, from, to]
+    mstore                        // [value, from, to]
+    0x40                          // [0x40, value, from, to]
+    0x00                          // [0x00, 0x40, value, from, to]
+    sha3                          // [key, value, from, to]
+    dup1                          // [key, key, value, from, to]
+    sload                         // [balance, key, value, from, to]
+
+    // update balance of to
+    dup3                          // [value, balance, key, value, from, to]
+    swap1                         // [balance, value, value, from, to]
+    add                           // [new_balance, key, value, from, to]
+
+    // store new balance of to
+    swap1                         // [key, new_balance, value, from, to]
+    sstore                        // [value, from, to]
+
+    // emit transfer event
+    0x00 mstore                    // [from, to]
+    __EVENT_HASH(transfer)         // [event_hash, from, to]
+    0x20 0x00                      // [0, 32, event_hash, from, to]
+    log3                           // []
+
+    // return true for succesful transfer
+    0x01 0x00 mstore
+    0x20 0x00 return
+
+    err:
+        0x00 0x00 revert
+}
+
+#define macro TRANSFER() = takes(0) returns (0) {
+    0x04 calldataload              // [to]
+    caller                         // [from, to]
+    0x24 calldataload              // [amount, from, to]
+
+    // load balance of sender from storage
+    dup2                          // [from, amount, from, to]
+    [BALANCE_LOCATION]            // [balance_ptr, from, amount, from, to]
+    0x00                          // [0x00, balance_ptr, from, amount, from, to]
+    mstore                        // [from, amount, from, to]
+    0x20                          // [0x20, from, amount, from, to]
+    mstore                        // [amount, from, to]
+    0x40                          // [0x40, amount, from, to]
+    0x00                          // [0x00, 0x40, amount, from, to]
+    sha3                          // [key, amount, from, to]
+    dup1                          // [key, key, amount, from, to]
+    sload                         // [balance, key, amount, from, to]
+
+    // update balance of sender
+    dup2                          // [amount, balance, key, amount, from, to]
+    swap1                         // [balance, amount, key, amount, from, to]
+    sub                           // [new_balance, key, amount, from, to]
+
+    // store new balance of sender
+    swap1                         // [key, new_balance, amount, from, to]
+    sstore                        // [amount, from, to]
+
+    // load balance of receiver from storage
+    dup3                          // [to, amount, from, to]
+    [BALANCE_LOCATION]            // [balance_ptr, to, amount, from, to]
+    0x00                          // [0x00, balance_ptr, to, amount, from, to]
+    mstore                        // [to, amount, from, to]
+    0x20                          // [0x20, to, amount, from, to]
+    mstore                        // [amount, from, to]
+    0x40                          // [0x40, amount, from, to]
+    0x00                          // [0x00, 0x40, amount, from, to]
+    sha3                          // [key, amount, from, to]
+    dup1                          // [key, key, amount, from, to]
+    sload                         // [balance, key, amount, from, to]
+
+    // update balance of receiver
+    dup3                          // [amount, balance, key, amount, from, to]
+    swap1                         // [balance, amount, amount, from, to]
+    add                           // [new_balance, key, amount, from, to]
+
+    // store new balance of receiver
+    swap1                         // [key, new_balance, amount, from, to]
+    sstore                        // [amount, from, to]
+
+    // emit transfer event
+    0x00 mstore                    // [from, to]
+    __EVENT_HASH(transfer)         // [event_hash, from, to]
+    0x20 0x00                      // [0, 32, event_hash, from, to]
+    log3                           // []
+
+    // return true for succesful transfer
+    0x01 0x00 mstore
+    0x20 0x00 return
+
+    // Error destination
+    // error:
+    //     0x00 0x00 revert
+}
+
+#define macro APPROVE() = takes (0) returns (0) {
+    0x24 calldataload       // [value]
+    0x04 calldataload       // [to, value]
+    caller                  // [from, to, value]
+
+    // retrieve allowance from storage
+    [ALLOWANCE_LOCATION]  // [allowance_ptr, from, to, value]
+    0x00                  // [0x00, allowance_ptr, from, to, value]
+    mstore                // [from, to, value]
+    dup1                  // [from, from, to, value]
+    0x20                  // [0x20, from, from, to, value]
+    mstore                // [from, to, value]
+    0x40                  // [0x40, from, to, value]
+    0x00                  // [0x00, 0x40, from, to, value]
+    sha3                  // [slot, from, to, value]
+    0x00                  // [0x00, slot, from, to, value]
+    mstore                // [from, to, value]
+    dup2                  // [to, from, to, value]                  
+    0x20                  // [0x20, to, from, to, value]
+    mstore                // [from , to, value]
+    0x40                  // [0x40, from, to, value]
+    0x00                  // [0x00, 0x40, from, to, value]
+    sha3                  // [key, from, to, value]
+    dup4 swap1            // [key, value, from, to, value]
+    sstore                // [from, to, value]
+
+    // emit transfer event
+    swap2                          // [value, from, to]
+    0x00 mstore                    // [from, to]
+    __EVENT_HASH(approval)         // [event_hash, from, to]
+    0x20 0x00                      // [0, 32, event_hash, from, to]
+    log3                           // []
+
+    // return true for succesful approval
+    0x01 0x00 mstore
+    0x20 0x00 return
+}
+
+#define macro MINT() = takes(0) returns (0) {
+
+}
+
+#define macro BURN() = takes(0) returns (0) {}
+
+
 // Main Macro
 #define macro MAIN() = takes(0) returns (0) {
-  0x00 calldataload             // [calldata, 0x00]
-  0xe0 shr                  // [func_sig]
+    0x00 calldataload             // [calldata, 0x00]
+    0xe0 shr                  // [func_sig]
 
-  dup1 __FUNC_SIG(name) eq name jumpi
-  dup1 __FUNC_SIG(symbol) eq symbol jumpi
-  dup1 __FUNC_SIG(decimals) eq decimals jumpi
-  dup1 __FUNC_SIG(totalSupply) eq totalSupply jumpi
-  dup1 __FUNC_SIG(balanceOf) eq balanceOf jumpi
-  dup1 __FUNC_SIG(allowance) eq allowance jumpi
+    dup1 __FUNC_SIG(name)          eq name          jumpi
+    dup1 __FUNC_SIG(symbol)        eq symbol        jumpi
+    dup1 __FUNC_SIG(decimals)      eq decimals      jumpi
+    dup1 __FUNC_SIG(totalSupply)   eq totalSupply   jumpi
+    dup1 __FUNC_SIG(balanceOf)     eq balanceOf     jumpi
+    dup1 __FUNC_SIG(allowance)     eq allowance     jumpi
+    dup1 __FUNC_SIG(transfer)      eq transfer      jumpi
+    dup1 __FUNC_SIG(transferFrom)  eq transferFrom  jumpi
+    dup1 __FUNC_SIG(approve)       eq approve       jumpi
+    dup1 __FUNC_SIG(mint)          eq mint          jumpi
+    dup1 __FUNC_SIG(burn)          eq burn          jumpi
 
-  // Call the function
-  name:
-      NAME()
-  symbol:
-      SYMBOL()
-  decimals:
-      DECIMALS()
-  totalSupply:
-      TOTAL_SUPPLY()
-  balanceOf:
-      BALANCE_OF()
-  allowance:
-      ALLOWANCE()
+    // Call the function
+    name:
+        NAME()
+    symbol:
+        SYMBOL()
+    decimals:
+        DECIMALS()
+    totalSupply:
+        TOTAL_SUPPLY()
+    balanceOf:
+        BALANCE_OF()
+    allowance:
+        ALLOWANCE()
+    transfer:
+        TRANSFER()
+    transferFrom:
+        TRANSFER_FROM()
+    approve:
+        APPROVE()
+    mint:
+        MINT()
+    burn:
+        BURN()
 
-  0x00 0x00 revert
+    0x00 0x00 revert
 }
