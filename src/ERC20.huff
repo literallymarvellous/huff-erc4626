@@ -225,7 +225,7 @@
     sub                   // [type(uint256).max, allowance, from, to, key, value]
     dup2                  // [allowance, type(uint256).max, allowance, key, from, to, value]
     eq                    // [allowance == type(uint256).max, allowance, key, from, to, value]
-    err jumpi             // [allowance == type(uint256).max, allowance, key, from, to, value]
+    error jumpi           // [allowance == type(uint256).max, allowance, key, from, to, value]
 
     // update allowance
     pop                    // [allowance, key, from, to, value]
@@ -247,6 +247,12 @@
     sha3                          // [key, value, from, to]
     dup1                          // [key, key, value, from, to]
     sload                         // [balance, key, value, from, to]
+
+    // ensure sender has sufficient balance
+    dup1                          // [balance, balance, key, amount, from, to]
+    dup3                          // [amount, balance, balance, key, amount, from, to]
+    gt                            // [amount > balance, balance, value, from, to]
+    error jumpi
 
     // update balance of from
     dup2                          // [value, balance, key, value, from, to]
@@ -289,7 +295,7 @@
     0x01 0x00 mstore
     0x20 0x00 return
 
-    err:
+    error:
         0x00 0x00 revert
 }
 
@@ -297,6 +303,8 @@
     0x04 calldataload              // [to]
     caller                         // [from, to]
     0x24 calldataload              // [amount, from, to]
+
+    
 
     // load balance of sender from storage
     dup2                          // [from, amount, from, to]
@@ -310,6 +318,12 @@
     sha3                          // [key, amount, from, to]
     dup1                          // [key, key, amount, from, to]
     sload                         // [balance, key, amount, from, to]
+
+    // ensure sender has sufficient balance
+    dup1                          // [balance, balance, key, amount, from, to]
+    dup3                          // [amount, balance, balance, key, amount, from, to]
+    gt                            // [amount > balance, balance, value, from, to]
+    error jumpi
 
     // update balance of sender
     dup2                          // [amount, balance, key, amount, from, to]
@@ -353,8 +367,8 @@
     0x20 0x00 return
 
     // Error destination
-    // error:
-    //     0x00 0x00 revert
+    error:
+        0x00 0x00 revert
 }
 
 #define macro APPROVE() = takes (0) returns (0) {
@@ -395,11 +409,92 @@
     0x20 0x00 return
 }
 
+/* Internal Mint/Burn Logic */
 #define macro MINT() = takes(0) returns (0) {
+    0x04 calldataload               // [to]
+    0x00                            // [from (0x00), to]
+    0x24 calldataload               // [value, from, to]
 
+    // update totalSupply
+    dup1                            // [value, value, from, to]
+    [TOTAL_SUPPLY_LOCATION] sload   // [supply, value, value, from, to]
+    add                             // [supply+value, value, from, to]
+    [TOTAL_SUPPLY_LOCATION] sstore
+
+    // transfer tokens to recipient
+
+    // load balance of receiver from storage
+    dup3                          // [to, amount, from, to]
+    [BALANCE_LOCATION]            // [balance_ptr, to, amount, from, to]
+    0x00                          // [0x00, balance_ptr, to, amount, from, to]
+    mstore                        // [to, amount, from, to]
+    0x20                          // [0x20, to, amount, from, to]
+    mstore                        // [amount, from, to]
+    0x40                          // [0x40, amount, from, to]
+    0x00                          // [0x00, 0x40, amount, from, to]
+    sha3                          // [key, amount, from, to]
+    dup1                          // [key, key, amount, from, to]
+    sload                         // [balance, key, amount, from, to]
+
+    // update balance of receiver
+    dup3                          // [amount, balance, key, amount, from, to]
+    swap1                         // [balance, amount, amount, from, to]
+    add                           // [new_balance, key, amount, from, to]
+
+    // store new balance of receiver
+    swap1                         // [key, new_balance, amount, from, to]
+    sstore                        // [amount, from, to]
+
+
+    // Emit the transfer event.
+    0x00 mstore                 // [from, to]
+    [TRANSFER_EVENT_SIGNATURE]  // [sig, from, to]
+    0x20 0x00                   // [0, 32, sig, from, to]
+    log3                        // []
 }
 
-#define macro BURN() = takes(0) returns (0) {}
+#define macro BURN() = takes(0) returns (0) {
+    0x04 calldataload               // [to]
+    0x00                            // [from (0x00), to]
+    0x24 calldataload               // [value, from, to]
+
+    // remove tokens from account(from)
+
+    // load balance of account from storage
+    dup3                          // [to, amount, from, to]
+    [BALANCE_LOCATION]            // [balance_ptr, to, amount, from, to]
+    0x00                          // [0x00, balance_ptr, to, amount, from, to]
+    mstore                        // [to, amount, from, to]
+    0x20                          // [0x20, to, amount, from, to]
+    mstore                        // [amount, from, to]
+    0x40                          // [0x40, amount, from, to]
+    0x00                          // [0x00, 0x40, amount, from, to]
+    sha3                          // [key, amount, from, to]
+    dup1                          // [key, key, amount, from, to]
+    sload                         // [balance, key, amount, from, to]
+
+    // update balance of account
+    dup3                          // [amount, balance, key, amount, from, to]
+    swap1                         // [balance, amount, amount, from, to]
+    sub                           // [balance-amount, key, amount, from, to]
+
+    // store new balance of receiver
+    swap1                         // [key, balance-amount, amount, from, to]
+    sstore                        // [amount, from, to]
+
+    // update totalSupply
+    dup1                            // [value, value, from, to]
+    [TOTAL_SUPPLY_LOCATION] sload   // [supply, value, value, from, to]
+    sub                             // [supply-value, value, from, to]
+    [TOTAL_SUPPLY_LOCATION] sstore
+
+
+    // Emit the transfer event.
+    0x00 mstore                 // [from, to]
+    [TRANSFER_EVENT_SIGNATURE]  // [sig, from, to]
+    0x20 0x00                   // [0, 32, sig, from, to]
+    log3                        // []
+}
 
 
 // Main Macro
